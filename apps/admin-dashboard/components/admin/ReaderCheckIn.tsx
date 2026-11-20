@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { database, errorMessage } from "../../lib/supabase";
 
-type ReaderCard = { users: { first_name: string; last_name: string; username: string; birthdate: string; is_active: boolean; user_role: string; membership_status: string; membership_expires_at: string | null } };
+type ReaderCard = { is_active: boolean; deactivated_at: string | null; users: { first_name: string; last_name: string; username: string; birthdate: string; is_active: boolean; user_role: string; membership_status: string; membership_expires_at: string | null } };
 type Alert = { log_id: number; details: string; created_at: string };
 const api = () => database().schema("sora_v2");
 
@@ -16,6 +16,7 @@ export function ReaderCheckIn() {
   const [message, setMessage] = useState("");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [alertError, setAlertError] = useState("");
+  const [diagnosis, setDiagnosis] = useState("");
   const mutation = useRef(false);
 
   useEffect(() => {
@@ -49,13 +50,21 @@ export function ReaderCheckIn() {
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {message && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{message}</p>}
     <form className="flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); void run(async () => {
-      setCard(null); setVerified(false);
+      setCard(null); setVerified(false); setDiagnosis("");
       const result = await api().from("librarycard")
-        .select("users(first_name,last_name,username,birthdate,is_active,user_role,membership_status,membership_expires_at)")
-        .eq("librarycard_rfid", rfid.trim()).eq("is_active", true).is("deactivated_at", null).maybeSingle();
+        .select("is_active,deactivated_at,users(first_name,last_name,username,birthdate,is_active,user_role,membership_status,membership_expires_at)")
+        .eq("librarycard_rfid", rfid.trim()).maybeSingle();
       if (result.error) throw result.error;
-      if (!result.data) throw new Error("No active library card found. Register or activate the card first.");
-      setCard(result.data as unknown as ReaderCard);
+      const found = result.data as unknown as ReaderCard | null;
+      if (!found) { setDiagnosis("No matching card record. Check that the exact scanned value, including leading zeroes, was registered."); return; }
+      if (!found.is_active || found.deactivated_at) { setDiagnosis("This library card is inactive. Activate or replace it before scanning again."); return; }
+      const reader = found.users;
+      if (!reader?.is_active || reader.user_role !== "Reader") { setDiagnosis("The linked reader account is inactive or is not a reader account."); return; }
+      if (reader.membership_status !== "ACTIVE" || !reader.membership_expires_at || new Date(reader.membership_expires_at).getTime() <= Date.now()) {
+        setDiagnosis("The linked membership is inactive or expired. Renew or activate it first."); return;
+      }
+      setCard(found);
+      setDiagnosis("Card and membership are active. If kiosk login still says card not recognized, ask an administrator to check that this reader has a linked Supabase Auth login.");
     }); }}>
       <label className="min-w-60 flex-1 text-sm font-semibold">Library card RFID
         <input className="mt-2 block w-full rounded-xl border border-[#e2d5c8] bg-[#fffbf5] px-3 py-3 font-normal" required maxLength={100} autoComplete="off"
@@ -63,6 +72,7 @@ export function ReaderCheckIn() {
       </label>
       <button className={button} disabled={busy || !rfid.trim()}>Look up reader</button>
     </form>
+    {diagnosis && <p role="status" className="rounded-xl border border-[#e2d5c8] bg-[#fffbf5] p-3 text-sm text-[#795a42]">{diagnosis}</p>}
     {reader && <div className="space-y-3 rounded-xl border border-[#e2d5c8] p-4">
       <p className="font-semibold">{reader.first_name} {reader.last_name} (@{reader.username})</p>
       <p className="text-sm">Birthdate: {reader.birthdate} · Membership: {reader.membership_status}</p>
