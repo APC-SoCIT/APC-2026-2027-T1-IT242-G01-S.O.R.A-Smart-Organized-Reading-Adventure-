@@ -18,6 +18,8 @@ interface ReplacementBook {
   book_copies?: { copy_id: number; copy_status: string; shelf_location: string | null }[];
 }
 
+type CatalogStatus = { book_id: number; status: string; available_copies: number };
+
 interface ReplacementUser {
   id: string;
   first_name: string;
@@ -72,7 +74,7 @@ async function readAll<T>(table: string, columns: string, order: string): Promis
   }
 }
 
-function toVolume(book: ReplacementBook, signedIn: boolean): Volume {
+function toVolume(book: ReplacementBook, signedIn: boolean, summary?: CatalogStatus): Volume {
   return {
     physicalCopies: signedIn ? (book.book_copies ?? []).map(copy => ({ copyId: copy.copy_id, status: copy.copy_status, shelfLocation: copy.shelf_location })) : undefined,
     id: String(book.book_id),
@@ -83,7 +85,8 @@ function toVolume(book: ReplacementBook, signedIn: boolean): Volume {
     chapters: 0,
     rating: 0,
     rarity: 3,
-    copies: signedIn ? (book.book_copies ?? []).filter(copy => copy.copy_status === 'In-Shelf').length : -1,
+    catalogStatus: summary?.status,
+    copies: summary?.available_copies ?? (signedIn ? (book.book_copies ?? []).filter(copy => copy.copy_status === 'In-Shelf').length : -1),
     synopsis: book.book_description ?? 'No description recorded.',
     plate: [book.title.toUpperCase()],
     plateColor: '#59351e',
@@ -102,8 +105,11 @@ export async function loadReplacementLibrary(session: Session | null): Promise<R
       + (session ? ',book_copies(copy_id,copy_status,shelf_location)' : ''),
     'book_id',
   );
+  const statuses = await api().rpc('catalog_book_statuses');
+  if (statuses.error) throw statuses.error;
+  const byBook = new Map((statuses.data as CatalogStatus[]).map(item => [item.book_id, item]));
   const base: ReplacementLibraryData = {
-    volumes: books.map(book => toVolume(book, !!session)),
+    volumes: books.map(book => toVolume(book, !!session, byBook.get(book.book_id))),
     profile: null, logs: [], rank: 'F', coins: 0, streak: 0,
     claimed: [], enrolled: [], commissions: [],
   };
