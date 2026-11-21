@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   BookOpen,
+  ChartNoAxesCombined,
   ChevronDown,
   Clock3,
   Edit3,
@@ -19,6 +20,7 @@ import {
   Radio,
   RefreshCw,
   Search,
+  Sparkles,
   Trophy,
   Users,
   Wallet,
@@ -42,12 +44,14 @@ import { EditBookCover } from "./EditBookCover";
 import { EditCopyLocation } from "./EditCopyLocation";
 import { CatalogueEditor } from "./CatalogueEditor";
 import { ReaderCheckIn } from "./ReaderCheckIn";
+import { AnalyticsWorkspace } from "./AnalyticsWorkspace";
 
 type Page =
-  "Overview" | "Catalogue" | "Challenges" | "Readers" | "Top-up terminal";
+  "Overview" | "Analytics" | "Catalogue" | "Challenges" | "Readers" | "Top-up terminal";
 type Data = DashboardData;
 const nav: { icon: typeof LayoutDashboard; page: Page; label: string }[] = [
   { icon: LayoutDashboard, page: "Overview", label: "Overview" },
+  { icon: ChartNoAxesCombined, page: "Analytics", label: "Analytics" },
   { icon: BookOpen, page: "Catalogue", label: "Book Management" },
   { icon: Trophy, page: "Challenges", label: "Challenges" },
   { icon: Users, page: "Readers", label: "Readers" },
@@ -151,6 +155,8 @@ export function AdminDashboard() {
   const content =
     page === "Overview" ? (
       <Overview data={data} setPage={setPage} name={name} run={run} />
+    ) : page === "Analytics" ? (
+      <AnalyticsWorkspace data={data} />
     ) : page === "Catalogue" ? (
       <CatalogueEditor
         rows={rows}
@@ -449,14 +455,14 @@ function Overview({
             ))}
           </div>
           <button
-            onClick={() => setPage("Top-up terminal")}
+            onClick={() => setPage("Analytics")}
             className="admin-cta group mt-5 flex w-full items-center justify-between overflow-hidden rounded-xl px-4 py-3.5 text-xs font-bold text-[#543822] shadow-[0_8px_20px_rgba(196,128,12,.35)]"
           >
             <span className="relative z-10 flex items-center gap-2">
               <span className="grid h-6 w-6 place-items-center rounded-lg bg-[#543822]/15 transition group-hover:rotate-12">
                 ✦
               </span>
-              Top-up terminal
+              View full analytics
             </span>
             <span className="relative z-10 flex items-center gap-1 transition group-hover:translate-x-1">
               Open <span aria-hidden="true">→</span>
@@ -821,20 +827,36 @@ function Challenges({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [points, setPoints] = useState("0");
+  const [difficulty, setDifficulty] = useState("Easy");
+  const [targetGenre, setTargetGenre] = useState("");
+  const [questFilter, setQuestFilter] = useState("All");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState("");
+  async function suggestQuest() {
+    setAiBusy(true);
+    setAiNote("");
+    try {
+      const { data: sessionData } = await database().auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Librarian sign-in is required.");
+      const response = await fetch("/api/quest-suggestion", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ difficulty }) });
+      const payload = await response.json() as { draft?: { title: string; description: string; requirement: string; difficulty: string; targetGenre: string; points: number; timeLimitDays: number; rationale: string }; source?: string; error?: string };
+      if (!response.ok || !payload.draft) throw new Error(payload.error || "A quest draft could not be generated.");
+      setTitle(payload.draft.title); setDescription(payload.draft.requirement); setDifficulty(payload.draft.difficulty); setTargetGenre(payload.draft.targetGenre); setPoints(String(payload.draft.points));
+      setAiNote(`${payload.source === "ai" ? "AI draft" : "Safe template"}: ${payload.draft.rationale} Review before saving.`);
+    } catch (cause) { setAiNote(errorMessage(cause)); } finally { setAiBusy(false); }
+  }
   return (
     <>
       <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <p className="text-sm text-[#806b59]">
           Monitor verified quest progress and reward eligibility.
         </p>
-        <ActionButton onClick={() => setComposer((value) => !value)}>
-          <Plus size={15} />
-          Create quest
-        </ActionButton>
+        <div className="flex flex-wrap gap-2"><select value={questFilter} onChange={(event) => setQuestFilter(event.target.value)} className="rounded-xl border border-[#e2d5c8] bg-white px-3 py-2 text-sm" aria-label="Filter quests by difficulty"><option>All</option><option>Easy</option><option>Medium</option><option>Hard</option></select><ActionButton onClick={() => setComposer((value) => !value)}><Plus size={15} />Create quest</ActionButton></div>
       </div>
       {composer && (
         <form
-          className="mb-6 grid gap-3 rounded-2xl border border-[#e8dfd3] bg-[#fffdf9] p-5 sm:grid-cols-4"
+          className="mb-6 grid gap-3 rounded-2xl border border-[#e8dfd3] bg-[#fffdf9] p-5 sm:grid-cols-2 lg:grid-cols-6"
           onSubmit={async (event) => {
             event.preventDefault();
             if (
@@ -843,11 +865,11 @@ function Challenges({
                   usesReplacementSchema
                     ? replacementDb().rpc("admin_create_quest", {
                         p_name: title,
-                        p_difficulty: "Easy",
+                        p_difficulty: difficulty,
                         p_description: description,
                         p_requirement: description,
                         p_points: Number(points),
-                        p_target_genre: null,
+                        p_target_genre: targetGenre || null,
                       })
                     : database()
                         .from("quests")
@@ -875,6 +897,8 @@ function Challenges({
             placeholder="Quest title"
             className="rounded-xl border p-3 text-sm"
           />
+          <select value={difficulty} onChange={(event) => setDifficulty(event.target.value)} className="rounded-xl border p-3 text-sm" aria-label="Quest difficulty"><option>Easy</option><option>Medium</option><option>Hard</option></select>
+          <input value={targetGenre} onChange={(event) => setTargetGenre(event.target.value)} placeholder="Target genre" className="rounded-xl border p-3 text-sm" />
           <input
             required
             value={description}
@@ -892,10 +916,12 @@ function Challenges({
             className="rounded-xl border p-3 text-sm"
           />
           <ActionButton onClick={() => {}}>Save quest</ActionButton>
+          <button type="button" disabled={aiBusy} onClick={() => void suggestQuest()} className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#c9863c] bg-[#fff7eb] px-4 py-3 text-sm font-semibold text-[#8f3c12] disabled:opacity-50"><Sparkles size={15}/>{aiBusy ? "Drafting..." : "Draft with AI"}</button>
+          {aiNote && <p className="sm:col-span-2 lg:col-span-6 text-xs leading-5 text-[#71543d]" role="status">{aiNote}</p>}
         </form>
       )}
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {data.quests.map((quest) => {
+        {data.quests.filter((quest) => questFilter === "All" || quest.quest_type.toLowerCase() === questFilter.toLowerCase()).map((quest) => {
           const pending = data.enrollments.filter(
             (item) =>
               item.quest_id === quest.quest_id &&

@@ -160,13 +160,13 @@ export function BonChatbot({ autoPeek = true }: BonChatbotProps) {
   async function askBon(text: string) {
     const trimmed = text.trim().slice(0, 500);
     if (!trimmed || thinking) return;
-    const recentHistory = messages.slice(-2).map((message) => ({
+    const recentHistory = messages.slice(-6).map((message) => ({
       role: message.from === 'bon' ? 'assistant' : 'user',
       content: message.text.slice(0, 300),
     }));
     const queryWords = trimmed.toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => word.length > 2 && !['book', 'books', 'what', 'which', 'there', 'about', 'should', 'read'].includes(word)) ?? [];
     const matchingBooks = queryWords.length ? volumes.filter((volume) => {
-      const searchable = `${volume.title} ${volume.author} ${volume.genre}`.toLowerCase();
+      const searchable = `${volume.title} ${volume.author} ${volume.genre} ${volume.synopsis}`.toLowerCase();
       return queryWords.some((word) => searchable.includes(word));
     }) : [];
     const availableBooks = volumes.filter((volume) => volume.copies > 0);
@@ -196,6 +196,10 @@ export function BonChatbot({ autoPeek = true }: BonChatbotProps) {
               const volume = volumeById(item.volumeId);
               const log = logs.find((entry) => String(entry.book_id) === item.volumeId && !entry.returned_at);
               return volume ? [{ title: volume.title, minutes: log?.total_reading_minutes ?? 0, status: 'reading' }] : [];
+            }),
+            readingHistory: logs.filter((log) => Boolean(log.returned_at)).slice(-12).flatMap((log) => {
+              const volume = volumeById(String(log.book_id));
+              return volume ? [{ title: volume.title, genre: volume.genre }] : [];
             }),
             quests: commissions.filter((quest) => enrolled.includes(quest.id)).map((quest) => ({
               id: quest.id,

@@ -5,8 +5,9 @@ type Intent = 'BOOK' | 'PROGRESS' | 'QUEST' | 'REWARD' | 'ACCOUNT' | 'IDENTITY' 
 type CatalogBook = { id: string; title: string; author: string; genre: string; synopsis: string; availableCopies: number };
 type Quest = { id: string; name: string; detail: string; points: number; status: string };
 type Reading = { title: string; minutes: number; status: string };
+type ReadingHistory = { title: string; genre: string };
 type CatalogSummary = { totalTitles: number; availableTitles: number; availabilityPending: number };
-type ChatContext = { section: string; signedIn?: boolean; userName?: string; rank?: string; points?: number; streak?: number; booksCompleted?: number; activeReading?: Reading[]; quests?: Quest[]; availableRewards?: Quest[]; catalog?: CatalogBook[]; catalogSummary?: CatalogSummary };
+type ChatContext = { section: string; signedIn?: boolean; userName?: string; rank?: string; points?: number; streak?: number; booksCompleted?: number; activeReading?: Reading[]; readingHistory?: ReadingHistory[]; quests?: Quest[]; availableRewards?: Quest[]; catalog?: CatalogBook[]; catalogSummary?: CatalogSummary };
 type AiAudit = { request_id?: string; status?: 'ALLOWED' | 'REJECTED'; reason?: string | null };
 
 const ALLOWED_SECTIONS = new Set(['archive', 'catalog', 'shelf', 'commissions', 'guide']);
@@ -51,7 +52,7 @@ function detectIntent(message: string): Intent {
   if (/\b(quests?|commissions?|challenges?)\b/.test(value)) return 'QUEST';
   if (/\b(progress|reading|finished|completed|minutes?|history|streak)\b/.test(value)) return 'PROGRESS';
   if (/\b(xp|points?|ranks?|levels?|achievements?)\b/.test(value)) return 'ACCOUNT';
-  if (/\b(books?|mangas?|titles?|authors?|genres?|read next|recommend|similar|available|catalog)\b|\b(do you have|is there|in the library|in your library)\b/.test(value)) return 'BOOK';
+  if (/\b(books?|mangas?|titles?|authors?|genres?|mood|read next|recommend|similar|available|catalog|funny|cozy|comfort|exciting|adventure|emotional)\b|\b(do you have|is there|in the library|in your library|something light|something dark|looking for)\b/.test(value)) return 'BOOK';
   if (/\b(app|website|feature|navigate|where|how do i|s\.o\.r\.a|sora|tankobonbon)\b/.test(value)) return 'PROJECT';
   return 'GENERAL';
 }
@@ -120,13 +121,20 @@ function parseReading(value: unknown): Reading | null {
   return title ? { title, minutes: boundedNumber(item.minutes, 1_000_000), status: cleanText(item.status, 24) } : null;
 }
 
+function parseReadingHistory(value: unknown): ReadingHistory | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Record<string, unknown>;
+  const title = cleanText(item.title, 160);
+  return title ? { title, genre: cleanText(item.genre, 100) || 'Uncategorized' } : null;
+}
+
 function parseBody(body: unknown) {
   if (!body || typeof body !== 'object') return null;
   const input = body as Record<string, unknown>;
   const message = cleanText(input.message, 2_000);
   if (!message) return null;
   let intent = detectIntent(message);
-  const history = Array.isArray(input.history) ? input.history.slice(-2).flatMap((item): ChatMessage[] => {
+  const history = Array.isArray(input.history) ? input.history.slice(-6).flatMap((item): ChatMessage[] => {
     if (!item || typeof item !== 'object') return [];
     const candidate = item as Record<string, unknown>;
     const role = candidate.role === 'user' ? 'user' : candidate.role === 'assistant' ? 'assistant' : null;
@@ -174,6 +182,7 @@ function parseBody(body: unknown) {
       return id && title ? [{ id, title, author: cleanText(book.author, 120) || 'Unknown author', genre: cleanText(book.genre, 100) || 'Uncategorized', synopsis: cleanText(book.synopsis, 240), availableCopies: boundedNumber(book.availableCopies, 999) }] : [];
     }) : [];
     context.activeReading = Array.isArray(raw.activeReading) ? raw.activeReading.slice(0, 3).map(parseReading).filter((item): item is Reading => Boolean(item)) : [];
+    context.readingHistory = Array.isArray(raw.readingHistory) ? raw.readingHistory.slice(0, 12).map(parseReadingHistory).filter((item): item is ReadingHistory => Boolean(item)) : [];
     const summary = raw.catalogSummary && typeof raw.catalogSummary === 'object' ? raw.catalogSummary as Record<string, unknown> : {};
     context.catalogSummary = {
       totalTitles: boundedNumber(summary.totalTitles, 100_000),
@@ -182,6 +191,20 @@ function parseBody(body: unknown) {
     };
   }
   return { message, history, intent, context };
+}
+
+function recommendationScore(book: CatalogBook, request: string, history: ReadingHistory[], activeReading: Reading[]) {
+  const haystack = `${book.title} ${book.author} ${book.genre} ${book.synopsis}`.toLowerCase();
+  const words = request.toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => word.length > 2 && !['book', 'books', 'read', 'recommend', 'suggest', 'something', 'looking', 'want'].includes(word)) ?? [];
+  const preferredGenres = new Set(history.map((item) => item.genre.toLowerCase()).filter((genre) => genre !== 'uncategorized'));
+  let score = words.reduce((total, word) => total + (haystack.includes(word) ? 4 : 0), 0);
+  if (preferredGenres.has(book.genre.toLowerCase())) score += 2;
+  if (/funny|light|happy|comfort|cozy/.test(request) && /comedy|slice of life|romance|school|family|friend/.test(haystack)) score += 3;
+  if (/exciting|action|adventure|fast|thrill/.test(request) && /action|adventure|fantasy|battle|mystery|thrill/.test(haystack)) score += 3;
+  if (/dark|serious|emotional|sad|deep/.test(request) && /drama|psychological|mystery|horror|tragedy|historical/.test(haystack)) score += 3;
+  if (history.some((item) => item.title.toLowerCase() === book.title.toLowerCase())) score -= 5;
+  if (activeReading.some((item) => item.title.toLowerCase() === book.title.toLowerCase())) score -= 8;
+  return score;
 }
 
 function directReply(input: ReturnType<typeof parseBody>) {
@@ -271,10 +294,15 @@ function directReply(input: ReturnType<typeof parseBody>) {
       const availability = mentioned.availableCopies > 0 ? `${mentioned.availableCopies} ${mentioned.availableCopies === 1 ? 'copy is' : 'copies are'} available` : 'I cannot see an available shelf copy';
       return { message: `${mentioned.title} by ${mentioned.author}: ${availability}.${mentioned.synopsis ? ` ${mentioned.synopsis}` : ''}`, navigateTo: 'catalog', recommendationIds: [], suggestions: ['Show me available books', 'What should I read next?'] };
     }
-    if (/recommend|read next|suggest/.test(normalized)) {
-      const available = candidates.filter((book) => book.availableCopies > 0).slice(0, 3);
+    if (/recommend|read next|suggest|something|looking for|mood|funny|cozy|comfort|exciting|adventure|emotional/.test(normalized)) {
+      const history = input.context.readingHistory ?? [];
+      const activeReading = input.context.activeReading ?? [];
+      const available = candidates.filter((book) => book.availableCopies > 0)
+        .map((book, index) => ({ book, index, score: recommendationScore(book, normalized, history, activeReading) }))
+        .sort((left, right) => right.score - left.score || left.index - right.index)
+        .slice(0, 3).map((item) => item.book);
       return available.length
-        ? { message: `Here are some books currently listed as available: ${available.map((book) => book.title).join(', ')}.`, navigateTo: 'catalog', recommendationIds: available.map((book) => book.id), suggestions: ['Show me available books'] }
+        ? { message: `Based on what you asked for${history.length ? ' and your recent reading' : ''}, try ${available.map((book) => `${book.title} (${book.genre})`).join(', ')}. ${available.length === 1 ? 'It has' : 'They all have'} a shelf copy available now. Tell me a mood, genre, or similar title to refine these picks.`, navigateTo: 'catalog', recommendationIds: available.map((book) => book.id), suggestions: ['Something light and funny', 'Recommend an action story', 'Show me available books'] }
         : { message: 'I cannot see any available books in the catalog data right now. Try browsing the Catalog or ask library staff to check availability.', navigateTo: 'catalog', recommendationIds: [], suggestions: ['Open the Catalog'] };
     }
     return { message: 'I cannot confirm that title from the catalog information I can access right now. Try searching the Catalog or ask library staff to check.', navigateTo: 'catalog', recommendationIds: [], suggestions: ['Show me available books', 'What should I read next?'] };

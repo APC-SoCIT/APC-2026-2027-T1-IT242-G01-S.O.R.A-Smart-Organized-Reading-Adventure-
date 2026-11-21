@@ -3,12 +3,16 @@ import { NextResponse } from "next/server";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type TopBook = { title: string; sessions: number };
+type GenreStat = { genre: string; sessions: number };
+type DailyActivity = { day: string; sessions: number; minutes: number };
 type AnalyticsContext = {
   totalTitles: number; totalCopies: number; availableCopies: number;
   copiesWithReaders: number; copiesInReturnCart: number; readerProfiles: number;
   activeReaderAccounts: number; activeSessions: number; completedSessions: number;
   totalReadingMinutes: number; averageReadingMinutes: number; activeMemberships: number;
   activeQuests: number; questEnrollments: number; topBooks: TopBook[];
+  reportingPeriod: string; genreStats: GenreStat[]; leastUsedBooks: TopBook[];
+  dailyActivity: DailyActivity[]; questCompletionRate: number;
 };
 
 const buckets = new Map<string, { count: number; resetAt: number }>();
@@ -30,11 +34,28 @@ function parseContext(value: unknown): AnalyticsContext | null {
     completedSessions: boundedNumber(item.completedSessions), totalReadingMinutes: boundedNumber(item.totalReadingMinutes, 100_000_000),
     averageReadingMinutes: boundedNumber(item.averageReadingMinutes, 100_000), activeMemberships: boundedNumber(item.activeMemberships),
     activeQuests: boundedNumber(item.activeQuests), questEnrollments: boundedNumber(item.questEnrollments),
+    reportingPeriod: cleanText(item.reportingPeriod, 120) || "current dashboard data",
+    questCompletionRate: boundedNumber(item.questCompletionRate, 100),
     topBooks: Array.isArray(item.topBooks) ? item.topBooks.slice(0, 5).flatMap((book): TopBook[] => {
       if (!book || typeof book !== "object") return [];
       const candidate = book as Record<string, unknown>;
       const title = cleanText(candidate.title, 160);
       return title ? [{ title, sessions: boundedNumber(candidate.sessions) }] : [];
+    }) : [],
+    leastUsedBooks: Array.isArray(item.leastUsedBooks) ? item.leastUsedBooks.slice(0, 5).flatMap((book): TopBook[] => {
+      if (!book || typeof book !== "object") return [];
+      const candidate = book as Record<string, unknown>; const title = cleanText(candidate.title, 160);
+      return title ? [{ title, sessions: boundedNumber(candidate.sessions) }] : [];
+    }) : [],
+    genreStats: Array.isArray(item.genreStats) ? item.genreStats.slice(0, 10).flatMap((entry): GenreStat[] => {
+      if (!entry || typeof entry !== "object") return [];
+      const candidate = entry as Record<string, unknown>; const genre = cleanText(candidate.genre, 100);
+      return genre ? [{ genre, sessions: boundedNumber(candidate.sessions) }] : [];
+    }) : [],
+    dailyActivity: Array.isArray(item.dailyActivity) ? item.dailyActivity.slice(-31).flatMap((entry): DailyActivity[] => {
+      if (!entry || typeof entry !== "object") return [];
+      const candidate = entry as Record<string, unknown>; const day = cleanText(candidate.day, 40);
+      return day ? [{ day, sessions: boundedNumber(candidate.sessions), minutes: boundedNumber(candidate.minutes) }] : [];
     }) : [],
   };
 }
@@ -53,7 +74,7 @@ function directReply(message: string, context: AnalyticsContext) {
   if (/^(hi|hello|hey|good morning|good afternoon|good evening)( bon)?$/.test(q)) return "Hello! I can help you understand Tankobonbon operations, catalog activity, readers, sessions, memberships, and quests.";
   if (/^(who are you|what are you|what can you do|help|help me)( bon)?$/.test(q)) return "I am BON, the Tankobonbon admin analytics assistant. I summarize current library operations and explain the system using the dashboard data available to this librarian session.";
   if (/what is tankobonbon|about tankobonbon|explain tankobonbon/.test(q)) return "Tankobonbon is S.O.R.A.'s library experience for managing the catalog, physical copies, readers, memberships, in-library reading sessions, seats, quests, and rewards. This admin dashboard focuses on daily operations and analytics.";
-  if (/analytics summary|today'?s analytics|operations summary|dashboard summary|how are we doing/.test(q)) return `Tankobonbon currently has ${context.totalTitles.toLocaleString()} titles, ${context.totalCopies.toLocaleString()} physical copies, ${context.availableCopies.toLocaleString()} available copies, ${context.readerProfiles.toLocaleString()} registered members, and ${context.activeSessions.toLocaleString()} active reading session${context.activeSessions === 1 ? "" : "s"}. ${context.activeMemberships.toLocaleString()} membership${context.activeMemberships === 1 ? " is" : "s are"} active.`;
+  if (/analytics summary|reporting period|operations summary|dashboard summary|how are we doing|summarize/.test(q)) return `For ${context.reportingPeriod}, there were ${context.completedSessions.toLocaleString()} completed reading sessions totaling ${context.totalReadingMinutes.toLocaleString()} minutes, with an average of ${context.averageReadingMinutes.toLocaleString()} minutes. Quest completion is ${context.questCompletionRate}%. Current operations show ${context.activeSessions.toLocaleString()} active sessions and ${context.availableCopies.toLocaleString()} available copies.`;
   if (/(how many|total|count).*(member|reader)|(member|reader).*(how many|total|count)/.test(q)) return `There are ${context.readerProfiles.toLocaleString()} registered reader member${context.readerProfiles === 1 ? "" : "s"} in Tankobonbon. ${context.activeReaderAccounts.toLocaleString()} account${context.activeReaderAccounts === 1 ? " is" : "s are"} active, and ${context.activeMemberships.toLocaleString()} currently have an active membership.`;
   if (/(how many|total|count).*(book|title)|(book|title).*(how many|total|count)/.test(q)) return `Tankobonbon currently has ${context.totalTitles.toLocaleString()} catalog title${context.totalTitles === 1 ? "" : "s"} and ${context.totalCopies.toLocaleString()} physical cop${context.totalCopies === 1 ? "y" : "ies"}.`;
   if (/available.*(copy|book)|(copy|book).*available|on shelf/.test(q)) return `${context.availableCopies.toLocaleString()} of ${context.totalCopies.toLocaleString()} physical copies are currently marked available on the shelf.`;
@@ -62,9 +83,17 @@ function directReply(message: string, context: AnalyticsContext) {
     const top = context.topBooks[0];
     return top ? `${top.title} currently leads with ${top.sessions.toLocaleString()} recorded reading session${top.sessions === 1 ? "" : "s"}.` : "There are no recorded reading sessions yet, so a most-read title cannot be identified.";
   }
+  if (/least|unused|underused|not (read|borrowed)/.test(q)) {
+    const books = context.leastUsedBooks.slice(0, 5);
+    return books.length ? `For ${context.reportingPeriod}, the least-used titles are ${books.map(book => `${book.title} (${book.sessions} sessions)`).join(", ")}.` : `No least-used title data is available for ${context.reportingPeriod}.`;
+  }
+  if (/genre/.test(q)) {
+    const genre = context.genreStats[0];
+    return genre ? `${genre.genre} was the most-read genre for ${context.reportingPeriod}, with ${genre.sessions.toLocaleString()} recorded reading session${genre.sessions === 1 ? "" : "s"}.` : `No genre activity is recorded for ${context.reportingPeriod}.`;
+  }
   if (/catalog health|healthy.*catalog|catalog.*healthy/.test(q)) return `${context.availableCopies.toLocaleString()} of ${context.totalCopies.toLocaleString()} copies are available, ${context.copiesWithReaders.toLocaleString()} are with readers, and ${context.copiesInReturnCart.toLocaleString()} are awaiting shelving. The catalog contains ${context.totalTitles.toLocaleString()} titles.`;
   if (/membership/.test(q)) return `${context.activeMemberships.toLocaleString()} active membership${context.activeMemberships === 1 ? " is" : "s are"} recorded across ${context.readerProfiles.toLocaleString()} registered reader members.`;
-  if (/quest/.test(q)) return `Tankobonbon has ${context.activeQuests.toLocaleString()} active quest${context.activeQuests === 1 ? "" : "s"} and ${context.questEnrollments.toLocaleString()} recorded reader enrollment${context.questEnrollments === 1 ? "" : "s"}.`;
+  if (/quest/.test(q)) return `Tankobonbon has ${context.activeQuests.toLocaleString()} active quest${context.activeQuests === 1 ? "" : "s"}, ${context.questEnrollments.toLocaleString()} recorded enrollment${context.questEnrollments === 1 ? "" : "s"}, and a ${context.questCompletionRate}% completion rate.`;
   return null;
 }
 

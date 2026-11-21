@@ -75,6 +75,7 @@ export function CompleteAddVolume({ data, close, run }: Props) {
   const [localPreview, setLocalPreview] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupMessage, setLookupMessage] = useState("");
+  const [lookupWarnings, setLookupWarnings] = useState<string[]>([]);
   const [lookupSource, setLookupSource] = useState<"catalog" | "isbn" | null>(
     null,
   );
@@ -124,6 +125,7 @@ export function CompleteAddVolume({ data, close, run }: Props) {
     setExistingBookId(null);
     setLookupSource(null);
     setLookupMessage("");
+    setLookupWarnings([]);
   };
   const clean = (value: string) => value.trim() || null;
   const input =
@@ -212,6 +214,7 @@ export function CompleteAddVolume({ data, close, run }: Props) {
       }
       setExistingBookId(result.existingBookId);
       setLookupSource(result.source);
+      setLookupWarnings(result.warnings || []);
       setTitleQuery(
         String(result.metadata.series_name || result.metadata.title || ""),
       );
@@ -568,6 +571,13 @@ export function CompleteAddVolume({ data, close, run }: Props) {
               >
                 {lookupMessage}
               </p>
+            )}
+            {lookupSource && (
+              <div className="mt-3 rounded-xl border border-[#dfcfbe] bg-[#fffaf1] px-3.5 py-3 text-[10px] leading-4 text-[#795a42]">
+                <p className="font-bold uppercase tracking-[.12em] text-[#8a481d]">Lookup completed · English metadata</p>
+                <p className="mt-1">{lookupMessage}</p>
+                {lookupWarnings.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-4">{lookupWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+              </div>
             )}
             {lookupSource === "isbn" && (
               <div className="mt-4 rounded-xl border border-[#e3d1bc] bg-white p-3.5">

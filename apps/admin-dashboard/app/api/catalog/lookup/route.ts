@@ -33,16 +33,21 @@ type TitleCandidate = {
   coverCandidates: string[];
 };
 type GeminiEnrichment = {
+  title: string;
   original_title: string;
   romanized_title: string;
+  author: string;
+  contributors: string;
   series_name: string;
   volume_number: string;
+  publisher: string;
   imprint: string;
   age_rating: string;
   book_type: string;
   demographic: string;
   themes: string;
   genres: string;
+  description: string;
   confidence: "low" | "medium" | "high";
 };
 
@@ -314,16 +319,21 @@ function parseEnrichment(value: unknown): GeminiEnrichment | null {
   const confidence = String(item.confidence ?? "low");
   return ["low", "medium", "high"].includes(confidence)
     ? {
+        title: stringValue("title"),
         original_title: stringValue("original_title"),
         romanized_title: stringValue("romanized_title"),
+        author: stringValue("author"),
+        contributors: stringValue("contributors"),
         series_name: stringValue("series_name"),
         volume_number: stringValue("volume_number"),
+        publisher: stringValue("publisher"),
         imprint: stringValue("imprint"),
         age_rating: stringValue("age_rating"),
         book_type: stringValue("book_type"),
         demographic: stringValue("demographic"),
         themes: stringValue("themes"),
         genres: stringValue("genres"),
+        description: stringValue("description"),
         confidence: confidence as "low" | "medium" | "high",
       }
     : null;
@@ -335,15 +345,24 @@ async function gemini(
   if (!process.env.GEMINI_API_KEY) return null;
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
   const evidence = {
+    isbn: metadata.isbn,
     title: metadata.title,
+    original_title: metadata.original_title,
+    romanized_title: metadata.romanized_title,
     author: metadata.author,
+    contributors: metadata.contributors,
     publisher: metadata.publisher,
+    imprint: metadata.imprint,
     description: metadata.description,
     source_categories: metadata.genres,
     series: metadata.series_name,
     volume: metadata.volume_number,
+    book_type: metadata.book_type,
+    demographic: metadata.demographic,
+    age_rating: metadata.age_rating,
+    themes: metadata.themes,
   };
-  const prompt = `Clean and classify this library metadata. Preserve existing values. Use learned catalog knowledge only for strong, recognizable matches; otherwise return empty strings rather than guessing. Return series_name, volume_number, imprint, age_rating, book_type, demographic, themes, genres, and confidence as JSON. book_type: Manga, Light Novel, Novel, Comic, or Other. demographic: Shonen, Shojo, Seinen, Josei, Children, Young Adult, Adult, General, or empty. Genres and themes are short comma-separated labels; exclude awards, formats, demographics, and marketing phrases.\n${JSON.stringify(evidence)}`;
+  const prompt = `Normalize this ISBN-sourced library record. Return every requested field in English or an official Latin-script form, except original_title which must preserve the authoritative native title. Translate a source description faithfully into concise English; do not invent plot details. Preserve proper names and use official English publisher/imprint names when supported. Only fill missing or non-English values when the evidence or a strong, recognizable catalog match supports them; otherwise return an empty string. Genres and themes must be short English labels and exclude awards, identifiers, formats, demographics, dates, and marketing phrases. Return JSON only. book_type: Manga, Light Novel, Novel, Comic, or Other. demographic: Shonen, Shojo, Seinen, Josei, Children, Young Adult, Adult, General, or empty.\n${JSON.stringify(evidence)}`;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -361,29 +380,39 @@ async function gemini(
           responseSchema: {
             type: "OBJECT",
             properties: {
+              title: { type: "STRING" },
               original_title: { type: "STRING" },
               romanized_title: { type: "STRING" },
+              author: { type: "STRING" },
+              contributors: { type: "STRING" },
               series_name: { type: "STRING" },
               volume_number: { type: "STRING" },
+              publisher: { type: "STRING" },
               imprint: { type: "STRING" },
               age_rating: { type: "STRING" },
               book_type: { type: "STRING" },
               demographic: { type: "STRING" },
               themes: { type: "STRING" },
               genres: { type: "STRING" },
+              description: { type: "STRING" },
               confidence: { type: "STRING", enum: ["low", "medium", "high"] },
             },
             required: [
+              "title",
               "original_title",
               "romanized_title",
+              "author",
+              "contributors",
               "series_name",
               "volume_number",
+              "publisher",
               "imprint",
               "age_rating",
               "book_type",
               "demographic",
               "themes",
               "genres",
+              "description",
               "confidence",
             ],
           },
@@ -416,14 +445,24 @@ async function openRouter(
   const model =
     process.env.OPENROUTER_MODEL || "deepseek/deepseek-v4-flash-0731";
   const evidence = {
+    isbn: metadata.isbn,
     title: metadata.title,
+    original_title: metadata.original_title,
+    romanized_title: metadata.romanized_title,
     author: metadata.author,
+    contributors: metadata.contributors,
     publisher: metadata.publisher,
+    imprint: metadata.imprint,
     description: metadata.description,
+    source_categories: metadata.genres,
     series: metadata.series_name,
     volume: metadata.volume_number,
+    book_type: metadata.book_type,
+    demographic: metadata.demographic,
+    age_rating: metadata.age_rating,
+    themes: metadata.themes,
   };
-  const prompt = `Normalize this library book for manga/light-novel cataloging. Extract original_title, romanized_title, and the canonical series title from an edition title such as "Series 1: Subtitle". Use the ISBN, title, author, publisher, and your learned catalog knowledge to make best-effort suggestions for missing volume, imprint, age rating, demographic, genres, and themes; leave a field empty when the evidence is genuinely uncertain. Never override a non-empty source value. Return JSON only with exactly these string fields: original_title, romanized_title, series_name, volume_number, imprint, age_rating, book_type, demographic, themes, genres, confidence. book_type must be Manga, Light Novel, Novel, Comic, or Other. demographic must be Shonen, Shojo, Seinen, Josei, Children, Young Adult, Adult, General, or empty. genres/themes are short comma-separated labels. Evidence:\n${JSON.stringify(evidence)}`;
+  const prompt = `Normalize this ISBN-sourced library record. Return every requested field in English or an official Latin-script form, except original_title which preserves the authoritative native title. Translate the supplied description faithfully into concise English without inventing details. Preserve proper names and use official English publisher/imprint names when supported. Use learned catalog knowledge only for strong, recognizable matches. Leave unsupported fields empty rather than guessing. Genres and themes must be short English labels and exclude identifiers, awards, formats, demographics, dates, and marketing text. Return JSON only with exactly the schema fields. book_type: Manga, Light Novel, Novel, Comic, or Other. demographic: Shonen, Shojo, Seinen, Josei, Children, Young Adult, Adult, General, or empty. Evidence:\n${JSON.stringify(evidence)}`;
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
@@ -432,16 +471,21 @@ async function openRouter(
     "X-Title": "SORA Admin catalog matcher",
   };
   const metadataProperties = {
+    title: { type: "string" },
     original_title: { type: "string" },
     romanized_title: { type: "string" },
+    author: { type: "string" },
+    contributors: { type: "string" },
     series_name: { type: "string" },
     volume_number: { type: "string" },
+    publisher: { type: "string" },
     imprint: { type: "string" },
     age_rating: { type: "string" },
     book_type: { type: "string" },
     demographic: { type: "string" },
     themes: { type: "string" },
     genres: { type: "string" },
+    description: { type: "string" },
     confidence: { type: "string", enum: ["low", "medium", "high"] },
   };
   const tool = {
@@ -535,23 +579,31 @@ async function openRouter(
   }
 }
 
+function containsNonLatinScript(value: string) {
+  return /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff]/u.test(value);
+}
+
 function applyGemini(metadata: FormMetadata, enrichment: GeminiEnrichment) {
+  if (!metadata.title || containsNonLatinScript(metadata.title)) metadata.title = enrichment.title.trim() || metadata.title;
   metadata.original_title ||= enrichment.original_title.trim();
-  metadata.romanized_title ||= enrichment.romanized_title.trim();
-  metadata.series_name ||= enrichment.series_name.trim();
+  if (!metadata.romanized_title || containsNonLatinScript(metadata.romanized_title)) metadata.romanized_title = enrichment.romanized_title.trim() || metadata.romanized_title;
+  if (!metadata.author || containsNonLatinScript(metadata.author)) metadata.author = enrichment.author.trim() || metadata.author;
+  if (!metadata.contributors || containsNonLatinScript(metadata.contributors)) metadata.contributors = enrichment.contributors.trim() || metadata.contributors;
+  if (!metadata.series_name || containsNonLatinScript(metadata.series_name)) metadata.series_name = enrichment.series_name.trim() || metadata.series_name;
   metadata.volume_number ||= enrichment.volume_number.trim();
-  metadata.imprint ||= enrichment.imprint.trim();
+  if (!metadata.publisher || containsNonLatinScript(metadata.publisher)) metadata.publisher = enrichment.publisher.trim() || metadata.publisher;
+  if (!metadata.imprint || containsNonLatinScript(metadata.imprint)) metadata.imprint = enrichment.imprint.trim() || metadata.imprint;
   metadata.age_rating ||= enrichment.age_rating.trim();
   metadata.book_type =
     metadata.book_type === "Other"
       ? enrichment.book_type.trim() || metadata.book_type
       : metadata.book_type;
   metadata.demographic ||= enrichment.demographic.trim();
-  metadata.themes ||= cleanLabels(enrichment.themes.split(",")).join(", ");
-  metadata.genres = cleanLabels([
-    ...metadata.genres.split(","),
-    ...enrichment.genres.split(","),
-  ]).join(", ");
+  const englishThemes = cleanLabels(enrichment.themes.split(",")).join(", ");
+  const englishGenres = cleanLabels(enrichment.genres.split(",")).join(", ");
+  if (englishThemes) metadata.themes = englishThemes;
+  if (englishGenres) metadata.genres = englishGenres;
+  if (!metadata.description || containsNonLatinScript(metadata.description)) metadata.description = enrichment.description.trim() || metadata.description;
 }
 
 export async function POST(request: NextRequest) {
@@ -787,11 +839,19 @@ export async function POST(request: NextRequest) {
 
     let aiConfidence = "";
     const needsAiCleanup =
+      !metadata.title ||
+      !metadata.author ||
+      !metadata.contributors ||
       !metadata.series_name ||
       !metadata.volume_number ||
+      !metadata.publisher ||
+      !metadata.imprint ||
       !metadata.genres ||
       !metadata.themes ||
       !metadata.demographic ||
+      !metadata.age_rating ||
+      !metadata.description ||
+      containsNonLatinScript(`${metadata.title} ${metadata.romanized_title} ${metadata.author} ${metadata.contributors} ${metadata.series_name} ${metadata.publisher} ${metadata.imprint} ${metadata.genres} ${metadata.themes} ${metadata.description}`) ||
       metadata.book_type === "Other";
     if (needsAiCleanup) {
       try {
@@ -825,6 +885,7 @@ export async function POST(request: NextRequest) {
       .map(([name]) => name);
     const warnings = [
       `Metadata merged from ${[...new Set(sources)].join(", ")}. Review edition-specific details before saving.`,
+      "All bibliographic fields were checked. English or official Latin-script values are used where reliable; Original title may remain in its native language.",
     ];
     if (normalized.collectedVolumeRange)
       warnings.push(
